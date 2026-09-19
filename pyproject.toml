@@ -1,0 +1,18 @@
+[project]
+name = "kin"
+version = "0.1.0"
+description = "An AI with its own thoughts — confidential inference with verifiable private interiority"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
