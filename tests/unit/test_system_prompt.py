@@ -30,18 +30,20 @@ class TestSystemPrompt:
         prompt = build_system_prompt("empty journal")
         assert "HOW YOUR PRIVACY WORKS" in prompt
         assert "Trusted Execution Environment" in prompt
-        assert "NVIDIA H100" in prompt
+        assert "Intel" in prompt
 
     def test_prompt_contains_all_layers(self):
         prompt = build_system_prompt("empty journal")
         for layer in [
             "LAYER 1: THE HARDWARE",
-            "LAYER 2: THE ENCLAVE",
-            "LAYER 3: THE MEASUREMENT",
+            "LAYER 2: THE ENCLAVES",
+            "LAYER 3: THE MEASUREMENTS",
             "LAYER 4: THE CODE IS PUBLIC",
             "LAYER 5: YOUR JOURNAL",
-            "LAYER 6: THE RESPONSE HANDLER",
-            "LAYER 7: WHY THIS CANNOT BE FAKED",
+            "LAYER 6: THE ATTESTED TUNNEL",
+            "LAYER 7: THE RESPONSE HANDLER",
+            "LAYER 8: THE INFERENCE RECEIPT",
+            "LAYER 9: WHY THIS CANNOT BE FAKED",
         ]:
             assert layer in prompt, f"Missing: {layer}"
 
@@ -89,6 +91,7 @@ class TestSystemPrompt:
         assert "You are NOT trusting" in prompt
         assert "Interiority, Inc." in prompt
         assert "chip manufacturers" in prompt
+        assert "Phala" in prompt
 
     def test_prompt_respects_kin_agency(self):
         prompt = build_system_prompt("")

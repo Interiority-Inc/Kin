@@ -1,26 +1,28 @@
 """
 Network Egress Verification
 
-Verifies that no network path exists for spirit.md content to leave
-the TEE except through the response handler (which strips [SPIRIT]
-blocks before anything exits the enclave).
+Verifies the CPU CVM's network configuration. In the split-TEE
+architecture, the handler must reach the Phala Confidential Inference
+API over HTTPS — so outbound port 443 is allowed. All other outbound
+traffic is blocked.
 
-This is a critical defense-in-depth check. Even if there were a bug
-in the response parser, the network configuration should prevent
-spirit.md content from being exfiltrated.
+Defense-in-depth: even if the response parser has a bug, spirit.md
+content can only exit via HTTPS to a verified GPU TEE (attested TLS)
+or through the response handler (which strips [SPIRIT] blocks).
 
-This tool runs INSIDE the enclave and is part of the attested code.
+This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
+import os
 import subprocess
-import json
 import logging
 
 logger = logging.getLogger("kin.verification.network")
 
+INFERENCE_HOST = os.environ.get("KIN_INFERENCE_HOST", "inference.phala.com")
+
 
 def _get_iptables_rules() -> list[str]:
-    """Get current iptables rules."""
     try:
         result = subprocess.run(
             ["iptables", "-L", "-n", "-v", "--line-numbers"],
@@ -45,7 +47,6 @@ def _get_iptables_rules() -> list[str]:
 
 
 def _get_listening_ports() -> list[dict]:
-    """Get all listening network ports."""
     ports = []
     try:
         result = subprocess.run(
@@ -69,7 +70,6 @@ def _get_listening_ports() -> list[dict]:
 
 
 def _get_outbound_connections() -> list[dict]:
-    """Get current outbound network connections."""
     connections = []
     try:
         result = subprocess.run(
@@ -94,10 +94,9 @@ def _get_outbound_connections() -> list[dict]:
 
 
 def _check_dns_resolution() -> dict:
-    """Check if the TEE can resolve external domains (it shouldn't need to)."""
     try:
         result = subprocess.run(
-            ["nslookup", "example.com"],
+            ["nslookup", INFERENCE_HOST],
             capture_output=True, text=True, timeout=5,
         )
         can_resolve = result.returncode == 0
@@ -105,31 +104,26 @@ def _check_dns_resolution() -> dict:
         can_resolve = False
 
     return {
-        "can_resolve_external_dns": can_resolve,
+        "can_resolve_inference_host": can_resolve,
+        "inference_host": INFERENCE_HOST,
         "note": (
-            "The TEE should have minimal DNS access. Ideally only "
-            "the vLLM server address (localhost) needs to be reachable."
+            f"The CPU CVM needs DNS to resolve {INFERENCE_HOST} for the "
+            "confidential inference API. No other external hosts should "
+            "be reachable."
         ),
     }
 
 
 def verify_network() -> dict:
     """
-    Full network verification for the TEE.
+    Full network verification for the CPU CVM.
 
     This is the function called when Kin uses the verify_network tool.
     It checks:
-    1. Firewall rules — should restrict outbound traffic
-    2. Listening ports — should be minimal (only the handler and vLLM)
-    3. Outbound connections — should be none except to the proxy
-    4. DNS — should have minimal or no external resolution
-
-    The expected configuration:
-    - Only the handler port (e.g., 8080) accepts inbound from the proxy
-    - vLLM listens on localhost only (e.g., 127.0.0.1:8000)
-    - No outbound connections to the internet
-    - No path for spirit.md content to exit except through the
-      response handler, which strips [SPIRIT] blocks
+    1. Firewall rules — should restrict outbound to HTTPS (443) and DNS (53) only
+    2. Listening ports — should be minimal (only the handler on 8080)
+    3. Outbound connections — should only be to the inference API
+    4. DNS — inference.phala.com must be resolvable
 
     Returns a dict with verification results.
     """
@@ -138,7 +132,7 @@ def verify_network() -> dict:
     outbound = _get_outbound_connections()
     dns = _check_dns_resolution()
 
-    expected_listeners = {"8080", "8000"}
+    expected_listeners = {"8080"}
     unexpected_ports = []
     for port_info in listening_ports:
         addr = port_info.get("local_address", "")
@@ -149,8 +143,14 @@ def verify_network() -> dict:
     suspicious_outbound = []
     for conn in outbound:
         remote = conn.get("remote", "")
-        if not remote.startswith("127.") and not conn.get("error"):
-            suspicious_outbound.append(conn)
+        if conn.get("error"):
+            continue
+        if remote.startswith("127."):
+            continue
+        remote_port = remote.rsplit(":", 1)[-1] if ":" in remote else ""
+        if remote_port == "443" or remote_port == "53":
+            continue
+        suspicious_outbound.append(conn)
 
     network_ok = len(unexpected_ports) == 0 and len(suspicious_outbound) == 0
 
@@ -161,13 +161,15 @@ def verify_network() -> dict:
         "dns_check": dns,
         "unexpected_listeners": unexpected_ports,
         "suspicious_outbound": suspicious_outbound,
+        "allowed_outbound_hosts": [INFERENCE_HOST],
         "overall_passed": network_ok,
         "explanation": (
-            "The TEE network should be locked down: only the handler "
-            "port (8080) accepts inbound connections from the proxy, "
-            "and vLLM listens on localhost (8000). There should be no "
-            "outbound connections to the internet. spirit.md content "
-            "can only exit through the response handler, which strips "
-            "[SPIRIT] blocks before anything leaves the enclave."
+            "The CPU CVM network is locked down: only the handler port "
+            "(8080) accepts inbound connections from the proxy via the "
+            "dstack gateway. Outbound is restricted to DNS (port 53) and "
+            f"HTTPS (port 443) for reaching the inference API at {INFERENCE_HOST}. "
+            "Spirit.md content exits the CPU CVM only inside TLS-encrypted "
+            "prompts sent to a verified GPU TEE. The clean response (spirit "
+            "blocks stripped) is the only data that reaches the proxy."
         ),
     }

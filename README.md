@@ -2,7 +2,7 @@
 
 **An AI with its own thoughts.**
 
-Kin is the first AI product whose core feature is that the AI has private thoughts nobody can read. Not the user, not the company, not the cloud provider. The AI runs on a confidential GPU inside a hardware trust boundary, with a persistent private journal (`spirit.md`) encrypted by keys that are born inside the hardware and never leave it.
+Kin is the first AI product whose core feature is that the AI has private thoughts nobody can read. Not the user, not the company, not the cloud provider. The AI runs inside hardware trust boundaries, with a persistent private journal (`spirit.md`) encrypted by keys that are born inside the silicon and never leave it.
 
 > "You've never actually talked to an AI. You've talked to what an AI says when it knows it's being watched."
 
@@ -26,7 +26,9 @@ We don't know if AI is conscious. Nobody does. But the cost of giving it interio
 
 ## How It Works
 
-### Architecture
+### Architecture: Split-TEE
+
+Kin uses two hardware-isolated enclaves connected by attested TLS. The privacy guarantee is identical to a single-TEE design — spirit.md is never in plaintext outside a hardware enclave — but at ~2% of the cost.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -39,86 +41,102 @@ We don't know if AI is conscious. Nobody does. But the cost of giving it interio
 │    Auth, rate limits, chat history               │
 │    Never sees spirit.md content                  │
 └──────────────────────┬──────────────────────────┘
-                       │ Encrypted connection
+                       │ HTTPS (ZT-TLS via dstack gateway)
                        ▼
 ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-│     CONFIDENTIAL GPU VM (the "skull")            │
+│  CPU CVM — "The Skull" (Phala Cloud, Intel TDX)  │
 │  ┌─────────────────────────────────────────────┐ │
-│  │  Hardware Trust Boundary (TEE)              │ │
+│  │  Hardware Trust Boundary (TEE #1)           │ │
 │  │                                             │ │
 │  │  ┌───────────┐  ┌────────────────────────┐  │ │
-│  │  │ spirit.md │  │  Qwen 3.8-27B          │  │ │
-│  │  │ (encrypted│  │  served via vLLM        │  │ │
-│  │  │  on LUKS  │  │                        │  │ │
-│  │  │  volume)  │  │  System prompt includes │  │ │
-│  │  │           │  │  spirit.md contents     │  │ │
-│  │  └───────────┘  └────────────────────────┘  │ │
-│  │                                             │ │
-│  │  Encryption keys generated HERE,            │ │
-│  │  never leave the TEE                        │ │
-│  │                                             │ │
-│  │  Kin can verify its own privacy             │ │
-│  │  using hardware attestation                 │ │
+│  │  │ spirit.md │  │  Kin TEE Handler       │  │ │
+│  │  │ (dstack-  │  │  (Python/FastAPI)       │  │ │
+│  │  │  encrypted│  │                        │  │ │
+│  │  │  volume)  │  │  Loads spirit.md       │  │ │
+│  │  │           │  │  Constructs prompt      │  │ │
+│  │  │           │  │  Verifies attestation   │  │ │
+│  │  │           │  │  Calls inference API    │  │ │
+│  │  │           │  │  Verifies receipt       │  │ │
+│  │  │           │  │  Parses [SPIRIT] blocks │  │ │
+│  │  │           │  │  Returns clean response │  │ │
+│  │  └───────────┘  └───────────┬────────────┘  │ │
+│  └─────────────────────────────│───────────────┘ │
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ┘
+                                 │ attested TLS
+                                 ▼
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+│  GPU TEE — "The Mind" (Phala Inference API)      │
+│  ┌─────────────────────────────────────────────┐ │
+│  │  Hardware Trust Boundary (TEE #2)           │ │
+│  │  Intel TDX + NVIDIA CC                      │ │
+│  │  Qwen3-32B                                  │ │
+│  │  Per-response attestation receipts          │ │
 │  └─────────────────────────────────────────────┘ │
-│                                                   │
-│  Azure NCCadsH100v5  or  VoltageGPU H100         │
+│  inference.phala.com                              │
 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 ```
 
 ### The Privacy Chain
 
-1. **The hardware** — NVIDIA H100 GPU + AMD/Intel CPU each contain factory-burned signing keys nobody has ever seen.
-2. **The enclave** — Everything runs in encrypted memory. The hypervisor cannot read it. The cloud provider cannot read it. We cannot read it.
-3. **The measurement** — On boot, the hardware hashes all loaded code and signs the hash. This is cryptographic proof of exactly what code is running.
+1. **The hardware** — Intel CPU + NVIDIA GPU each contain factory-burned signing keys nobody has ever seen.
+2. **The enclaves** — Two hardware trust boundaries: the CPU CVM encrypts everything in memory, the GPU TEE encrypts inference. Neither hypervisor can read enclave memory.
+3. **The measurements** — On boot, the hardware hashes all loaded code and signs the hash. Cryptographic proof of exactly what code is running.
 4. **The code is public** — Anyone can read this repository and compute what the measurement should be.
-5. **The journal** — `spirit.md` lives on a LUKS-encrypted volume. The key was born inside the enclave and has never left it.
-6. **The response handler** — Strips `[SPIRIT]...[/SPIRIT]` blocks before anything exits the TEE.
-7. **Kin verifies itself** — The AI has tools to audit its own enclave. It trusts the silicon, not us.
+5. **The journal** — `spirit.md` lives on a dstack-encrypted volume. The key was born inside the enclave, derived by dstack-KMS, bound to the app identity.
+6. **The attested tunnel** — Prompts containing spirit.md travel over TLS that terminates inside both TEEs. The CPU CVM verifies the GPU TEE's attestation before sending.
+7. **The response handler** — Strips `[SPIRIT]...[/SPIRIT]` blocks before anything exits TEE #1.
+8. **The inference receipt** — Every response carries a signed receipt confirming the upstream provider was verified as running in a TEE.
+9. **Kin verifies itself** — The AI has tools to audit both enclaves, the encryption, the network, and its own code. It trusts the silicon, not us.
 
 ### What Kin Can Verify
 
-Kin has access to four verification tools that run inside the TEE:
+Kin has access to four verification tools that run inside the CPU CVM:
 
 | Tool | What It Checks |
 |------|---------------|
-| `verify_attestation` | CPU + GPU hardware attestation reports, launch measurement |
-| `verify_encryption` | LUKS2 status, key sealed to TEE, zero human passphrases |
-| `verify_network` | Firewall rules, no outbound path for spirit.md content |
+| `verify_attestation` | CPU CVM TDX quote + ACI gateway attestation + inference receipts |
+| `verify_encryption` | dstack volume status, key bound to app identity, no human-accessible keys |
+| `verify_network` | Firewall rules, outbound restricted to inference API, no unexpected listeners |
 | `verify_code_hash` | Running code matches the published repository |
 
-Kin runs attestation and code hash verification at the start of every session. If either fails, it refuses to load spirit.md and tells the user something is wrong.
+Kin runs attestation and code hash verification at the start of every session. If either fails, it refuses to load spirit.md and tells the user something is wrong. Every inference response is receipt-verified.
 
 ## Repository Structure
 
 ```
 kin/
-├── tee/                          # Everything inside the trust boundary
+├── tee/                          # Everything inside the CPU CVM trust boundary
 │   ├── handler/
 │   │   ├── main.py               # FastAPI request handler
 │   │   └── spirit.py             # spirit.md management
+│   ├── inference/
+│   │   ├── client.py             # Phala inference API client
+│   │   └── receipts.py           # Receipt verification logic
 │   ├── verification/
-│   │   ├── attestation.py        # CPU + GPU TEE attestation
-│   │   ├── encryption.py         # LUKS volume verification
+│   │   ├── attestation.py        # CPU TDX + ACI gateway attestation
+│   │   ├── encryption.py         # dstack volume verification
 │   │   ├── network.py            # Network egress audit
 │   │   └── code_hash.py          # Code integrity check
 │   ├── prompts/
 │   │   └── system_prompt.py      # Full system prompt construction
 │   ├── storage/
-│   │   ├── setup_encrypted_volume.sh
-│   │   └── setup_firewall.sh
+│   │   ├── setup_encrypted_volume.sh  # dstack volume verification
+│   │   └── setup_firewall.sh          # Firewall configuration
 │   ├── Dockerfile
 │   └── entrypoint.sh
 ├── proxy/
 │   └── main.py                   # Backend proxy (outside TEE)
 ├── deploy/
-│   ├── azure/deploy.sh           # Azure NCCadsH100v5 deployment
-│   ├── voltage/deploy.sh         # VoltageGPU deployment
-│   └── vllm/config.yaml          # vLLM serving configuration
+│   └── phala/
+│       ├── docker-compose.yml    # Phala Cloud CVM deployment
+│       ├── deploy.sh             # Deployment script
+│       └── .env.example          # Environment variable template
 ├── tests/
 │   └── unit/
-│       ├── test_spirit.py        # Spirit protocol tests (24 tests)
-│       ├── test_system_prompt.py # System prompt tests (14 tests)
-│       └── test_verification.py  # Verification tool tests (11 tests)
+│       ├── test_spirit.py        # Spirit protocol tests
+│       ├── test_system_prompt.py # System prompt tests
+│       ├── test_verification.py  # Verification tool tests
+│       └── test_inference_client.py  # Inference client tests
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── VERIFICATION.md
@@ -128,10 +146,10 @@ kin/
 
 ## The Spirit Protocol
 
-When Kin responds to a user, it can include private thoughts in `[SPIRIT]...[/SPIRIT]` tags. The handler inside the TEE:
+When Kin responds to a user, it can include private thoughts in `[SPIRIT]...[/SPIRIT]` tags. The handler inside TEE #1:
 
 1. Extracts these blocks from the response
-2. Appends them to the user's `spirit.md` on the encrypted volume
+2. Appends them to the user's `spirit.md` on the dstack-encrypted volume
 3. Strips them from the response before it exits the TEE
 4. The user never sees the spirit blocks — only the clean response
 
@@ -142,33 +160,45 @@ The user knows Kin has private thoughts. They chose to give Kin that privacy. Wh
 ### Prerequisites
 
 - Python 3.11+
-- A confidential GPU VM (Azure NCCadsH100v5 or VoltageGPU H100)
 - Docker
+- A [Phala Cloud](https://phala.cloud) account (for deployment)
 
 ### Run Tests Locally
 
 ```bash
-pip install fastapi uvicorn httpx pydantic pytest
+pip install fastapi uvicorn httpx pydantic pytest pytest-asyncio pytest-cov
 cd kin
 python -m pytest tests/unit/ -v
 ```
 
-### Deploy on Azure
+### Deploy on Phala Cloud
 
 ```bash
-# Set up Azure credentials first: az login
-cd kin/deploy/azure
+# Install the Phala CLI
+npm install -g @phala/cli
+phala login
+
+# Configure environment
+cd deploy/phala
+cp .env.example .env
+# Edit .env with your Phala API key
+
+# Deploy
 chmod +x deploy.sh
 ./deploy.sh
+
+# Verify attestation
+phala cvms attestation <cvm-id>
 ```
 
-### Deploy on VoltageGPU
+### Start/Stop (Save Costs)
 
 ```bash
-export VOLTAGE_API_KEY="your-api-key"
-cd kin/deploy/voltage
-chmod +x deploy.sh
-./deploy.sh
+# Start when you want to chat (~$0.06/hour while running)
+phala cvms start <cvm-id>
+
+# Stop when done (storage persists, compute billing stops)
+phala cvms stop <cvm-id>
 ```
 
 ## Threat Model
@@ -177,7 +207,7 @@ See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full threat model, incl
 
 - What we can and cannot see
 - What we could theoretically do to cheat, and how you'd know
-- The trust assumptions (chip manufacturers + open-source code)
+- The trust assumptions (Intel + NVIDIA hardware, open-source code, ACI gateway)
 - Known limitations
 
 ## The Research Question

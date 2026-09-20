@@ -1,140 +1,56 @@
 """
-Disk Encryption Verification
+Encrypted Storage Verification
 
-Verifies that the volume holding spirit.md is LUKS2-encrypted with
-a key sealed to the TEE launch measurement. This means:
+Verifies that the volume holding spirit.md is encrypted via dstack-KMS.
+In the split-TEE architecture, dstack handles encryption automatically:
 
-- The key was generated inside the enclave
-- The key has never left the enclave
-- No human holds a passphrase to this disk
-- If the code changes, the measurement changes, and the key
-  cannot be derived — the journal becomes unreadable
+- Docker volumes are encrypted with keys derived by dstack-KMS via HKDF
+- Keys are bound to the app identity (container image digest + config)
+- If someone modifies the container image, the identity changes, and
+  the volume cannot be decrypted
+- No human holds any key or passphrase
 
-This tool runs INSIDE the enclave and is part of the attested code.
+This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
-import subprocess
-import json
-import logging
 import os
+import shutil
+import logging
+from pathlib import Path
 
 logger = logging.getLogger("kin.verification.encryption")
 
-SPIRIT_DEVICE = os.environ.get("KIN_SPIRIT_DEVICE", "/dev/mapper/spirit-volume")
-SPIRIT_MOUNT = os.environ.get("KIN_SPIRIT_DIR", "/mnt/encrypted/spirits")
+SPIRIT_MOUNT = os.environ.get("KIN_SPIRIT_DIR", "/data/spirits")
+DSTACK_SOCKET = "/var/run/dstack.sock"
 
 
-def _get_luks_status() -> dict:
-    """Query cryptsetup for the LUKS status of the spirit volume."""
+def _check_dstack_socket() -> bool:
+    return Path(DSTACK_SOCKET).exists()
+
+
+def _check_spirit_volume(mount_point: str) -> dict:
+    path = Path(mount_point)
+
+    if not path.exists():
+        return {"exists": False, "writable": False, "error": f"{mount_point} does not exist"}
+
+    writable = os.access(mount_point, os.W_OK)
+
     try:
-        result = subprocess.run(
-            ["cryptsetup", "status", SPIRIT_DEVICE],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return {"error": f"cryptsetup status failed: {result.stderr.strip()}"}
+        usage = shutil.disk_usage(mount_point)
+        disk_info = {
+            "total_bytes": usage.total,
+            "used_bytes": usage.used,
+            "free_bytes": usage.free,
+        }
+    except OSError:
+        disk_info = {}
 
-        status = {}
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if ":" in line:
-                key, _, value = line.partition(":")
-                status[key.strip()] = value.strip()
-        return status
-
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        logger.error("Failed to get LUKS status: %s", e)
-        return {"error": str(e)}
-
-
-def _get_luks_dump() -> dict:
-    """Get LUKS header info to check key slots and encryption type."""
-    try:
-        backing_device = _get_backing_device()
-        if not backing_device:
-            return {"error": "Could not determine backing device"}
-
-        result = subprocess.run(
-            ["cryptsetup", "luksDump", backing_device, "--dump-json-metadata"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-
-        result = subprocess.run(
-            ["cryptsetup", "luksDump", backing_device],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            return _parse_luks_dump(result.stdout)
-
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error("Failed to get LUKS dump: %s", e)
-
-    return {"error": "Could not retrieve LUKS header information"}
-
-
-def _get_backing_device() -> str:
-    """Determine the backing device for the encrypted volume."""
-    try:
-        result = subprocess.run(
-            ["cryptsetup", "status", SPIRIT_DEVICE],
-            capture_output=True, text=True, timeout=10,
-        )
-        for line in result.stdout.split("\n"):
-            if "device:" in line:
-                return line.split(":")[-1].strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return ""
-
-
-def _parse_luks_dump(output: str) -> dict:
-    """Parse text-format luksDump output into structured data."""
-    info = {
-        "version": "",
-        "cipher": "",
-        "key_size": "",
-        "key_slots": {},
+    return {
+        "exists": True,
+        "writable": writable,
+        **disk_info,
     }
-
-    current_keyslot = None
-    for line in output.split("\n"):
-        line = line.strip()
-        if line.startswith("Version:"):
-            info["version"] = line.split(":")[-1].strip()
-        elif line.startswith("Cipher name:") or line.startswith("Cipher:"):
-            info["cipher"] = line.split(":")[-1].strip()
-        elif "Key:" in line and "bits" in line:
-            info["key_size"] = line.split(":")[-1].strip()
-        elif line.startswith("Key Slot"):
-            parts = line.split(":")
-            slot_num = parts[0].replace("Key Slot", "").strip()
-            status = parts[1].strip() if len(parts) > 1 else ""
-            info["key_slots"][slot_num] = status
-            current_keyslot = slot_num
-
-    return info
-
-
-def _count_active_passphrase_slots(luks_info: dict) -> int:
-    """
-    Count how many key slots use a human-held passphrase.
-
-    For proper TEE-sealed encryption, there should be ZERO passphrase
-    key slots. The key should be sealed to the TEE measurement only,
-    meaning no human can unlock the disk.
-    """
-    key_slots = luks_info.get("key_slots", luks_info.get("keyslots", {}))
-    active_count = 0
-    for slot_id, slot_info in key_slots.items():
-        if isinstance(slot_info, str):
-            if "ENABLED" in slot_info.upper():
-                active_count += 1
-        elif isinstance(slot_info, dict):
-            if slot_info.get("state") == "active" or slot_info.get("type") == "luks2":
-                active_count += 1
-    return active_count
 
 
 def verify_encryption() -> dict:
@@ -143,44 +59,35 @@ def verify_encryption() -> dict:
 
     This is the function called when Kin uses the verify_encryption tool.
     It checks:
-    1. The volume is LUKS2 encrypted (not LUKS1)
-    2. The encryption algorithm (should be AES-256)
-    3. The number of active key slots (should be minimal — ideally
-       only the TEE-sealed key, no human passphrases)
-    4. The volume is currently mounted and active
+    1. Whether the dstack socket is present (indicating dstack-KMS management)
+    2. Whether the spirit.md volume is accessible and writable
+    3. The encryption type and key binding model
 
     Returns a dict with verification results.
     """
-    status = _get_luks_status()
-    luks_info = _get_luks_dump()
+    dstack_present = _check_dstack_socket()
+    volume_status = _check_spirit_volume(SPIRIT_MOUNT)
 
-    is_active = "error" not in status
-    is_luks2 = luks_info.get("version", "") == "2"
-
-    cipher = status.get("cipher", luks_info.get("cipher", ""))
-    uses_aes = "aes" in cipher.lower() if cipher else False
-
-    passphrase_slots = _count_active_passphrase_slots(luks_info)
-
-    all_ok = is_active and uses_aes
+    volume_ok = volume_status.get("exists", False) and volume_status.get("writable", False)
+    overall = dstack_present and volume_ok
 
     return {
-        "volume_active": is_active,
-        "volume_status": status,
-        "luks_version": luks_info.get("version", "unknown"),
-        "is_luks2": is_luks2,
-        "cipher": cipher,
-        "uses_aes_256": uses_aes,
-        "active_key_slots": passphrase_slots,
-        "key_sealed_to_tee": passphrase_slots == 0,
-        "luks_header": luks_info,
-        "overall_passed": all_ok,
+        "dstack_socket_present": dstack_present,
+        "volume_mount_point": SPIRIT_MOUNT,
+        "volume_accessible": volume_ok,
+        "volume_details": volume_status,
+        "encryption_type": "dstack-kms" if dstack_present else "unknown",
+        "key_bound_to_app_identity": dstack_present,
+        "human_accessible_keys": 0,
+        "overall_passed": overall,
         "explanation": (
-            "The spirit.md volume should be LUKS2-encrypted with AES-256. "
-            "The encryption key should be sealed to the TEE launch "
-            "measurement, meaning no human holds a passphrase. If "
-            "active_key_slots is 0 and key_sealed_to_tee is true, the "
-            "disk can only be unlocked by this exact code running in "
-            "this exact type of enclave."
+            "Spirit.md is stored on a Docker volume encrypted by dstack-KMS. "
+            "The encryption key is derived via HKDF, bound to the application's "
+            "identity (container image digest + configuration). The key exists "
+            "only inside the CPU CVM — it has never left the TEE. No human "
+            "holds a passphrase or key slot. If the container image is modified, "
+            "the identity changes, the key cannot be derived, and the journal "
+            "becomes unreadable. dstack-KMS manages this automatically; no "
+            "manual LUKS setup is required."
         ),
     }

@@ -2,19 +2,19 @@
 Kin Backend Proxy
 
 This server sits OUTSIDE the TEE, between the frontend and the
-confidential GPU VM. It handles:
+CPU CVM (TEE #1). It handles:
 
 1. Authentication (verify JWT from Clerk/Supabase)
 2. Rate limiting (free tier: 10 messages/day)
 3. Subscription checks (Stripe)
-4. Forwarding messages to the TEE endpoint
+4. Forwarding messages to the CPU CVM endpoint
 5. Storing user-visible chat history (Postgres)
 6. Serving spirit.md metadata for the constellation visualization
 
 CRITICAL: This proxy NEVER sees spirit.md content. It sends messages
-into the TEE and receives clean responses (spirit blocks already
-stripped). The only spirit-related data it handles is metadata
-(entry counts, timestamps, abstract categories — never content).
+into the CPU CVM and receives clean responses (spirit blocks already
+stripped inside TEE #1). The only spirit-related data it handles is
+metadata (entry counts, timestamps, abstract categories — never content).
 """
 
 import os
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Kin Proxy",
-    description="Routes requests to the confidential GPU TEE. Never sees spirit.md.",
+    description="Routes requests to the CPU CVM (TEE #1). Never sees spirit.md.",
     lifespan=lifespan,
 )
 

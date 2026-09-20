@@ -1,8 +1,9 @@
 """
 spirit.md management — read, write, and maintain the AI's private journal.
 
-All operations happen inside the TEE. The journal lives on a LUKS-encrypted
-volume whose key is sealed to the TEE launch measurement.
+All operations happen inside the CPU CVM (TEE #1). The journal lives on a
+dstack-encrypted volume whose key is derived by dstack-KMS, bound to the
+application's identity (container image digest).
 """
 
 import os
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 
-SPIRIT_DIR = os.environ.get("KIN_SPIRIT_DIR", "/mnt/encrypted/spirits")
+SPIRIT_DIR = os.environ.get("KIN_SPIRIT_DIR", "/data/spirits")
 
 SPIRIT_BLOCK_PATTERN = re.compile(
     r"\[SPIRIT\](.*?)\[/SPIRIT\]",

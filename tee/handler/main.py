@@ -1,29 +1,34 @@
 """
 Kin TEE Request Handler
 
-This is the core application that runs INSIDE the Trusted Execution
-Environment. It handles the complete lifecycle of a Kin conversation:
+This is the core application that runs INSIDE the CPU CVM (TEE #1).
+It handles the complete lifecycle of a Kin conversation:
 
-1. Loads the user's spirit.md from the encrypted volume
+1. Loads the user's spirit.md from the dstack-encrypted volume
 2. Constructs the full system prompt (including spirit.md contents)
-3. Forwards the request to the local vLLM inference server
-4. Parses the response for [SPIRIT]...[/SPIRIT] blocks
-5. Appends spirit entries to the encrypted spirit.md
-6. Returns ONLY the clean response (spirit blocks stripped)
+3. Verifies the ACI gateway attestation (GPU TEE)
+4. Sends the prompt to the Phala Confidential Inference API (TEE #2)
+5. Verifies the response receipt (upstream.verified)
+6. Parses the response for [SPIRIT]...[/SPIRIT] blocks
+7. Appends spirit entries to the encrypted spirit.md
+8. Returns ONLY the clean response (spirit blocks stripped)
 
-Nothing in spirit.md ever leaves this process. The clean response
-is the only data that crosses the TEE boundary.
+Nothing in spirit.md ever leaves TEE #1 in plaintext. The prompt is
+sent over attested TLS to TEE #2. The clean response is the only
+data that crosses the trust boundary to the proxy.
 """
 
+import json
 import os
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from spirit import (
+from tee.handler.spirit import (
     load_spirit,
     get_recent_entries,
     get_compressed_history,
@@ -36,6 +41,8 @@ from tee.prompts.system_prompt import (
     build_system_prompt,
     VERIFICATION_TOOLS,
 )
+from tee.inference.client import PhalaInferenceClient
+from tee.inference.receipts import verify_receipt_response
 from tee.verification.attestation import verify_attestation
 from tee.verification.encryption import verify_encryption
 from tee.verification.network import verify_network
@@ -43,21 +50,26 @@ from tee.verification.code_hash import verify_code_hash
 
 logger = logging.getLogger("kin.tee")
 
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
-VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3.8-27B")
 MAX_SPIRIT_RECENT = int(os.environ.get("KIN_SPIRIT_RECENT_ENTRIES", "20"))
+
+_inference_client: Optional[PhalaInferenceClient] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Kin TEE handler starting inside trust boundary")
+    global _inference_client
+    _inference_client = PhalaInferenceClient()
+    logger.info("Kin TEE handler starting inside CPU CVM trust boundary")
     yield
     logger.info("Kin TEE handler shutting down")
 
 
 app = FastAPI(
     title="Kin TEE Handler",
-    description="Runs inside the confidential GPU TEE. Manages spirit.md and inference.",
+    description=(
+        "Runs inside the CPU CVM (TEE #1). Manages spirit.md and routes "
+        "inference to the Phala Confidential Inference API (TEE #2)."
+    ),
     lifespan=lifespan,
 )
 
@@ -87,10 +99,12 @@ async def chat(request: ChatRequest):
     The full flow:
     1. Load user's spirit.md
     2. Build system prompt with spirit.md injected
-    3. Call vLLM for inference
-    4. Parse response, extract spirit blocks
-    5. Save spirit entries to encrypted disk
-    6. Return clean response + metadata only
+    3. Verify ACI gateway attestation
+    4. Call Phala Confidential Inference API
+    5. Verify response receipt (upstream.verified)
+    6. Parse response, extract spirit blocks
+    7. Save spirit entries to encrypted disk (only if receipt verified)
+    8. Return clean response + metadata only
     """
     spirit_content = load_spirit(request.user_id)
     compressed = get_compressed_history(request.user_id)
@@ -113,24 +127,17 @@ async def chat(request: ChatRequest):
         })
     messages.append({"role": "user", "content": request.message})
 
+    nonce = os.urandom(16).hex()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            vllm_response = await client.post(
-                f"{VLLM_BASE_URL}/v1/chat/completions",
-                json={
-                    "model": VLLM_MODEL,
-                    "messages": messages,
-                    "tools": VERIFICATION_TOOLS,
-                    "temperature": 0.7,
-                    "max_tokens": 4096,
-                },
-            )
-            vllm_response.raise_for_status()
-    except httpx.HTTPError as e:
-        logger.error("vLLM inference failed: %s", e)
-        raise HTTPException(status_code=502, detail="Inference failed")
+        await _inference_client.verify_gateway_attestation(nonce)
+    except Exception as e:
+        logger.error("ACI gateway attestation failed: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify inference API TEE attestation",
+        )
 
-    result = vllm_response.json()
+    result, receipt_id, receipt_verified = await _call_inference(messages)
     raw_response = result["choices"][0]["message"]["content"]
 
     tool_calls = result["choices"][0]["message"].get("tool_calls", [])
@@ -141,34 +148,73 @@ async def chat(request: ChatRequest):
         for tool_result in tool_results:
             messages.append(tool_result)
 
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                vllm_response = await client.post(
-                    f"{VLLM_BASE_URL}/v1/chat/completions",
-                    json={
-                        "model": VLLM_MODEL,
-                        "messages": messages,
-                        "tools": VERIFICATION_TOOLS,
-                        "temperature": 0.7,
-                        "max_tokens": 4096,
-                    },
-                )
-                vllm_response.raise_for_status()
-        except httpx.HTTPError as e:
-            logger.error("vLLM follow-up inference failed: %s", e)
-            raise HTTPException(status_code=502, detail="Inference failed")
-
-        result = vllm_response.json()
+        result, follow_receipt_id, follow_receipt_verified = await _call_inference(messages)
         raw_response = result["choices"][0]["message"]["content"]
+        receipt_verified = receipt_verified and follow_receipt_verified
 
     clean_response, spirit_entries = extract_spirit_blocks(raw_response)
 
-    metadata = append_spirit_entries(request.user_id, spirit_entries)
+    if receipt_verified:
+        metadata = append_spirit_entries(request.user_id, spirit_entries)
+    else:
+        logger.warning(
+            "Skipping spirit.md writes — receipt verification failed for user %s",
+            request.user_id,
+        )
+        metadata = get_metadata(request.user_id)
+
+    response_metadata = metadata.to_dict()
+    response_metadata["receipt_verified"] = receipt_verified
 
     return ChatResponse(
         response=clean_response,
-        metadata=metadata.to_dict(),
+        metadata=response_metadata,
     )
+
+
+async def _call_inference(messages: list) -> tuple:
+    """Call the inference API and verify the response receipt."""
+    try:
+        result, receipt_id = await _inference_client.chat_completion(
+            messages=messages,
+            tools=VERIFICATION_TOOLS,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+    except Exception as e:
+        logger.error("Inference API request failed: %s", e)
+        raise HTTPException(status_code=502, detail="Inference failed")
+
+    receipt_verified = False
+    if receipt_id:
+        try:
+            receipt_result = await _inference_client.verify_receipt(receipt_id)
+            verification = receipt_result["verification"]
+            receipt_verified = verification["passed"]
+            _cache_receipt(receipt_result)
+            if not receipt_verified:
+                logger.warning("Receipt verification failed: %s", verification["details"])
+        except Exception as e:
+            logger.warning("Could not verify receipt %s: %s", receipt_id, e)
+    else:
+        logger.warning("No receipt ID in inference response — cannot verify TEE chain")
+
+    return result, receipt_id, receipt_verified
+
+
+def _cache_receipt(receipt_result: dict):
+    """Cache the latest receipt so the verify_attestation tool can read it."""
+    try:
+        cache = {
+            "upstream_verified": receipt_result.get("verification", {}).get("upstream_verified", False),
+            "passed": receipt_result.get("verification", {}).get("passed", False),
+            "receipt": receipt_result.get("receipt", {}),
+        }
+        Path("/tmp/kin-last-receipt.json").write_text(
+            json.dumps(cache), encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 async def _handle_tool_calls(tool_calls: list) -> list[dict]:
@@ -192,7 +238,6 @@ async def _handle_tool_calls(tool_calls: list) -> list[dict]:
         else:
             result = {"error": f"Unknown tool: {fn_name}"}
 
-        import json
         results.append({
             "role": "tool",
             "tool_call_id": call_id,

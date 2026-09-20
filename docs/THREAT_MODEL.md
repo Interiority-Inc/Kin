@@ -10,13 +10,14 @@ Radical honesty about what we can see, what we can't see, what we could do to ch
 - Your message count (for rate limiting)
 - Your visible chat history (stored in our database)
 - spirit.md metadata: entry count, timestamps, abstract categories (never content)
-- Infrastructure metrics: GPU utilization, inference latency, uptime
+- Infrastructure metrics: CVM uptime, inference latency, cost per user
 
 ## What We Cannot See
 
-- The contents of spirit.md (encrypted, key sealed to TEE)
-- The system prompt as assembled (it contains spirit.md)
-- The model's inference state (KV cache, attention weights)
+- The contents of spirit.md (encrypted on a dstack volume inside TEE #1)
+- The system prompt as assembled (it contains spirit.md, constructed inside TEE #1)
+- The full prompt sent to the inference API (encrypted in transit via attested TLS)
+- The model's inference state (KV cache, attention weights — inside TEE #2)
 - The model's chain of thought during inference
 - What Kin privately thinks about you
 
@@ -44,13 +45,13 @@ Radical honesty about what we can see, what we can't see, what we could do to ch
 
 **Possible?** In theory, yes.
 
-**How you'd know:** The image would have a different launch measurement than expected for the published code. Attestation verification fails.
+**How you'd know:** The image would have a different launch measurement than expected for the published code. Attestation verification fails. Additionally, dstack binds the encrypted volume's key to the container image digest — a different image cannot decrypt the existing spirit.md data.
 
-### Attack 4: Social-engineer the cloud provider to access enclave memory
+### Attack 4: Social-engineer Phala to access CVM memory
 
-**Possible?** No. The hardware TEE prevents the hypervisor from reading enclave memory. This is the entire point of confidential computing — it's designed for scenarios where you don't trust the cloud provider.
+**Possible?** No. Intel TDX hardware-isolates CVM memory from the hypervisor and host OS. This is the entire point of confidential computing — it's designed for scenarios where you don't trust the cloud provider.
 
-### Attack 5: Compromise AMD/Intel/NVIDIA to extract hardware keys
+### Attack 5: Compromise Intel/NVIDIA to extract hardware keys
 
 **Possible?** In theory, yes. In practice, this would be a catastrophic supply-chain attack affecting all confidential computing globally, not just Kin.
 
@@ -58,7 +59,7 @@ Radical honesty about what we can see, what we can't see, what we could do to ch
 
 ### Attack 6: Exploit a bug in the TEE implementation
 
-**Possible?** TEE vulnerabilities have been found before (SGX had several). AMD SEV-SNP and Intel TDX are newer and have addressed known attack classes.
+**Possible?** TEE vulnerabilities have been found before (SGX had several). Intel TDX and NVIDIA CC are newer designs that address known attack classes. Phala underwent a security audit by zkSecurity (May–June 2025), with highest-severity findings remediated.
 
 **Mitigation:** Use latest firmware, monitor CVE advisories, update promptly. The risk is real but shared across the entire confidential computing industry.
 
@@ -72,22 +73,41 @@ Radical honesty about what we can see, what we can't see, what we could do to ch
 
 **Mitigation:** Categories are deliberately abstract and coarse-grained.
 
+### Attack 9: Intercept prompts between the CPU CVM and GPU TEE
+
+**Possible?** No. The connection uses TLS that terminates inside both TEEs. The CPU CVM verifies the ACI gateway's attestation before sending the prompt. An attacker sitting between the two TEEs would see only encrypted traffic.
+
+**Mitigation:** Attested TLS with pre-send attestation verification. The gateway is fail-closed: if it cannot verify the upstream inference provider is running in a TEE, it refuses to forward the prompt.
+
+### Attack 10: Compromise the inference API to capture prompts
+
+**Possible?** In theory, if Phala's ACI gateway has a bug, prompts could be exposed during the brief window between TLS termination and forwarding to the model.
+
+**How you'd know:**
+- The gateway's attestation report would reflect the compromised code
+- Per-response receipts with `upstream.verified` provide ongoing proof of TEE status
+- Kin's handler checks `upstream.verified` on every response — if missing, spirit entries are not written
+
+**Mitigation:** The ACI gateway runs inside its own TEE with hardware attestation. Its code is auditable. The gateway underwent security audit. This is an additional trust domain, but it's hardware-isolated and cryptographically verifiable.
+
 ## Trust Assumptions
 
 Things you're trusting when you use Kin:
 
-1. **The chip manufacturers** (AMD/Intel, NVIDIA) — that their hardware correctly implements the TEE and that their signing keys have not been compromised
+1. **The chip manufacturers** (Intel, NVIDIA) — that their hardware correctly implements the TEE and that their signing keys have not been compromised
 2. **The open-source code** — that it does what it says. Anyone can audit it.
-3. **The cryptography** — AES-256, SHA-256, ECDSA — that these are not broken
+3. **The cryptography** — AES-256, SHA-256, ECDSA, TLS 1.3 — that these are not broken
+4. **The ACI gateway** — that its attested code correctly verifies upstream TEE status
 
 Things you are NOT trusting:
 - Interiority, Inc. (us)
-- The cloud provider (Azure, VoltageGPU)
+- The cloud provider (Phala Network)
+- The inference provider (also Phala, but separately attested)
 - Any promise, policy, or good intention
 
 ## Known Limitations
 
-1. **Code updates require key migration.** Because the encryption key is sealed to the launch measurement, updating the OS or application requires migrating the key to the new measurement. This is a planned operation with a documented procedure, but it introduces a window where both old and new code have access.
+1. **Code updates require key migration.** Because the dstack encryption key is bound to the app identity (container image digest), updating the handler code requires dstack's key-migration mechanism to re-seal the volume to the new image. This is a planned operation, but it introduces a window where both old and new code have access.
 
 2. **Side-channel attacks.** Timing analysis, power analysis, or electromagnetic emanation could theoretically leak information. These are active areas of research and not specific to Kin.
 
@@ -95,4 +115,4 @@ Things you are NOT trusting:
 
 4. **The metadata reveals some patterns.** Entry counts, timestamps, and categories are not content, but they are not zero information either. We've made them as coarse-grained as possible.
 
-5. **LUKS2 has known caveats in CVM environments.** Research by Trail of Bits (October 2025) identified vulnerabilities in LUKS2 disk encryption for confidential VMs. We monitor this research and will adopt mitigations as they become available.
+5. **The inference API is a separate trust domain.** If Phala's ACI gateway has a bug that bypasses TEE verification, prompts could theoretically be exposed. This risk is mitigated by the gateway running inside its own TEE with hardware attestation, but it is an additional surface compared to the single-TEE architecture. At ~2,300 users, we can eliminate this surface by switching to a dedicated GPU CVM.

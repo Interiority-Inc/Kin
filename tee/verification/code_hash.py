@@ -7,14 +7,14 @@ published GitHub repository.
 
 MVP uses Option B from the spec: the expected hash is embedded
 during CI/CD rather than fetched from GitHub at runtime. This
-keeps the TEE's network surface minimal.
+keeps the CPU CVM's network surface minimal.
 
 The attestation chain already proves that the running code matches
 the launch measurement (signed by hardware). This tool provides
 an additional layer: it lets Kin verify that the code corresponds
 to a specific published commit.
 
-This tool runs INSIDE the enclave and is part of the attested code.
+This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
 import hashlib

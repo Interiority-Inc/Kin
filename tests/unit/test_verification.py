@@ -23,7 +23,9 @@ class TestAttestationVerification:
     def test_returns_structured_result(self):
         result = verify_attestation()
         assert "cpu_tee_type" in result
-        assert "gpu_report" in result
+        assert "cpu_report" in result
+        assert "gpu_attestation" in result
+        assert "latest_receipt" in result
         assert "launch_measurement" in result
         assert "expected_measurement" in result
         assert "measurement_match" in result
@@ -34,7 +36,7 @@ class TestAttestationVerification:
         tee_type = _detect_cpu_tee()
         # Outside a CVM, should detect "none"
         # (this test runs in CI, not inside a TEE)
-        assert tee_type in ("none", "amd-sev-snp", "intel-tdx")
+        assert tee_type in ("none", "intel-tdx")
 
     def test_explanation_is_informative(self):
         result = verify_attestation()
@@ -46,13 +48,17 @@ class TestEncryptionVerification:
 
     def test_returns_structured_result(self):
         result = verify_encryption()
-        assert "volume_active" in result
+        assert "dstack_socket_present" in result
+        assert "volume_accessible" in result
+        assert "encryption_type" in result
+        assert "key_bound_to_app_identity" in result
+        assert "human_accessible_keys" in result
         assert "overall_passed" in result
         assert "explanation" in result
 
     def test_fails_gracefully_outside_tee(self):
         result = verify_encryption()
-        # Outside a TEE, LUKS won't be active — that's expected
+        # Outside a TEE, dstack won't be present — that's expected
         assert isinstance(result["overall_passed"], bool)
 
 
@@ -63,6 +69,7 @@ class TestNetworkVerification:
         assert "firewall_rules" in result
         assert "listening_ports" in result
         assert "outbound_connections" in result
+        assert "allowed_outbound_hosts" in result
         assert "overall_passed" in result
         assert "explanation" in result
 
