@@ -23,9 +23,7 @@ jobs:
           pip install fastapi uvicorn httpx pydantic pytest pytest-asyncio pytest-cov
 
       - name: Run unit tests
-        run: |
-          cd kin
-          python -m pytest tests/unit/ -v --tb=short --cov=tee --cov-report=term-missing
+        run: python -m pytest tests/unit/ -v --tb=short --cov=tee --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -41,7 +39,7 @@ jobs:
         run: pip install ruff
 
       - name: Lint
-        run: ruff check kin/
+        run: ruff check .
 
   # This job computes the code hash that gets embedded at build time.
   # The hash must match what the verification tool computes inside the TEE.
@@ -53,7 +51,7 @@ jobs:
       - name: Compute application code hash
         run: |
           # Deterministic hash of all source files (same algorithm as verify_code_hash)
-          find kin/ -type f \
+          find . -type f \
             ! -path '*/__pycache__/*' \
             ! -name '*.pyc' \
             ! -path '*/.git/*' \
@@ -74,21 +72,46 @@ jobs:
           name: code-hash
           path: CODE_HASH.txt
 
-  # Docker build — CPU CVM image (python:3.12-slim base, no CUDA)
-  # Does not push — that's a manual deployment step
-  docker-build:
+  # Docker build + push to GHCR — CPU CVM image (python:3.12-slim, no CUDA)
+  # Only runs on push to main (not on PRs)
+  docker-push:
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, lint, compute-code-hash]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download code hash
+        uses: actions/download-artifact@v4
+        with:
+          name: code-hash
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build CPU CVM container
-        run: |
-          docker build \
-            --build-arg GIT_COMMIT=${{ github.sha }} \
-            -f kin/tee/Dockerfile \
-            -t kin-tee:${{ github.sha }} \
-            kin/
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read code hash
+        id: code-hash
+        run: echo "hash=$(cat CODE_HASH.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push CPU CVM container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tee/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/interiority-inc/kin-tee-handler:latest
+            ghcr.io/interiority-inc/kin-tee-handler:${{ github.sha }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            CODE_HASH=${{ steps.code-hash.outputs.hash }}
