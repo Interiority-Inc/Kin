@@ -6,9 +6,10 @@ services:
     command:
       - |
         mkdir -p $${KIN_SPIRIT_DIR:-/data/spirits}
-        echo "[kin] Skipping firewall for Stage 0.5"
+        sed -i 's/urandom(16)/urandom(32)/;s/token_hex(16)/token_hex(32)/' /app/tee/handler/main.py /app/tee/verification/attestation.py
+        sed -i 's/upstream.get("verified", False)/any(e.get("type")=="upstream.verified" and e.get("result")=="verified" for e in receipt.get("event_log",[]))/' /app/tee/inference/receipts.py
+        sed -i 's/bool(receipt.get("request_hash"))/any(e.get("type")=="request.received" and e.get("body_hash") for e in receipt.get("event_log",[]))/;s/bool(receipt.get("response_hash"))/any(e.get("type")=="response.returned" and e.get("body_hash") for e in receipt.get("event_log",[]))/' /app/tee/inference/receipts.py
         cd /app
-        echo "[kin] Starting uvicorn..."
         exec python3 -m uvicorn tee.handler.main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info 2>&1
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock

@@ -125,7 +125,7 @@ async def chat(request: ChatRequest):
         })
     messages.append({"role": "user", "content": request.message})
 
-    nonce = os.urandom(16).hex()
+    nonce = os.urandom(32).hex()
     try:
         await _inference_client.verify_gateway_attestation(nonce)
     except Exception as e:

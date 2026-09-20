@@ -68,7 +68,7 @@ def _get_aci_gateway_attestation(inference_endpoint: Optional[str] = None) -> di
     proving it hasn't been tampered with. A fresh nonce prevents replay.
     """
     endpoint = inference_endpoint or INFERENCE_ENDPOINT
-    nonce = secrets.token_hex(16)
+    nonce = secrets.token_hex(32)
 
     try:
         with httpx.Client(timeout=30.0) as client:
