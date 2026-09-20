@@ -19,6 +19,12 @@ INFERENCE_HOST="${KIN_INFERENCE_HOST:-inference.phala.com}"
 
 log "Configuring CPU CVM firewall..."
 
+if ! iptables -L -n >/dev/null 2>&1; then
+    log "WARNING: iptables not available (missing NET_ADMIN capability?)"
+    log "Firewall skipped — TEE encryption is the primary privacy guarantee"
+    exit 0
+fi
+
 iptables -F 2>/dev/null || true
 iptables -X 2>/dev/null || true
 

@@ -2,6 +2,14 @@ version: "3"
 services:
   handler:
     image: ghcr.io/interiority-inc/kin-tee-handler:latest
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        mkdir -p $${KIN_SPIRIT_DIR:-/data/spirits}
+        echo "[kin] Skipping firewall for Stage 0.5"
+        cd /app
+        echo "[kin] Starting uvicorn..."
+        exec python3 -m uvicorn tee.handler.main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info 2>&1
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - spirit-data:/data
