@@ -10,9 +10,9 @@ Verifies that the client:
 """
 
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 os.environ.setdefault("PHALA_INFERENCE_API_KEY", "test-key")
 os.environ.setdefault("KIN_SPIRIT_DIR", "/tmp/kin-test-spirits")
@@ -112,7 +112,7 @@ class TestPhalaInferenceClient:
 
         with patch.object(client, "_client") as mock_client:
             mock_client.get = AsyncMock(return_value=mock_response)
-            result = await client.verify_gateway_attestation("test-nonce-123")
+            await client.verify_gateway_attestation("test-nonce-123")
             call_kwargs = mock_client.get.call_args
             assert call_kwargs[1]["params"]["nonce"] == "test-nonce-123"
 

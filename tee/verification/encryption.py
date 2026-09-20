@@ -13,9 +13,9 @@ In the split-TEE architecture, dstack handles encryption automatically:
 This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
+import logging
 import os
 import shutil
-import logging
 from pathlib import Path
 
 logger = logging.getLogger("kin.verification.encryption")

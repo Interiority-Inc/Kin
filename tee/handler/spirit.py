@@ -6,14 +6,12 @@ dstack-encrypted volume whose key is derived by dstack-KMS, bound to the
 application's identity (container image digest).
 """
 
+import json
 import os
 import re
-import json
 import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
-from typing import Optional
-
 
 SPIRIT_DIR = os.environ.get("KIN_SPIRIT_DIR", "/data/spirits")
 

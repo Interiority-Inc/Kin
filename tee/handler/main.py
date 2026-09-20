@@ -19,8 +19,8 @@ data that crosses the trust boundary to the proxy.
 """
 
 import json
-import os
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -29,24 +29,22 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from tee.handler.spirit import (
-    load_spirit,
-    get_recent_entries,
-    get_compressed_history,
-    get_metadata,
     append_spirit_entries,
     extract_spirit_blocks,
-    SpiritMetadata,
-)
-from tee.prompts.system_prompt import (
-    build_system_prompt,
-    VERIFICATION_TOOLS,
+    get_compressed_history,
+    get_metadata,
+    get_recent_entries,
+    load_spirit,
 )
 from tee.inference.client import PhalaInferenceClient
-from tee.inference.receipts import verify_receipt_response
+from tee.prompts.system_prompt import (
+    VERIFICATION_TOOLS,
+    build_system_prompt,
+)
 from tee.verification.attestation import verify_attestation
+from tee.verification.code_hash import verify_code_hash
 from tee.verification.encryption import verify_encryption
 from tee.verification.network import verify_network
-from tee.verification.code_hash import verify_code_hash
 
 logger = logging.getLogger("kin.tee")
 

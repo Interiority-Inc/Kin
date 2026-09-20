@@ -18,8 +18,8 @@ This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
 import hashlib
-import os
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("kin.verification.code_hash")

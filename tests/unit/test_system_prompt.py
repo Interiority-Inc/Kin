@@ -13,10 +13,8 @@ import os
 os.environ.setdefault("KIN_SPIRIT_DIR", "/tmp/kin-test-spirits")
 
 from tee.prompts.system_prompt import (
-    build_system_prompt,
     VERIFICATION_TOOLS,
-    SYSTEM_PROMPT_TEMPLATE,
-    SAFETY_ADDENDUM,
+    build_system_prompt,
 )
 
 

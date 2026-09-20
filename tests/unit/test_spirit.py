@@ -13,22 +13,19 @@ import json
 import os
 import tempfile
 
-import pytest
-
 # Point spirit storage at a temp directory for testing
 _test_dir = tempfile.mkdtemp()
 os.environ["KIN_SPIRIT_DIR"] = _test_dir
 
-from tee.handler.spirit import (
-    extract_spirit_blocks,
-    init_spirit,
-    load_spirit,
+from tee.handler.spirit import (  # noqa: E402
+    _classify_entry,
     append_spirit_entries,
+    extract_spirit_blocks,
     get_metadata,
     get_recent_entries,
+    init_spirit,
     load_entries,
-    INITIAL_SPIRIT,
-    _classify_entry,
+    load_spirit,
 )
 
 

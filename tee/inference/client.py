@@ -6,8 +6,8 @@ CPU CVM (TEE #1). Every call verifies the attestation chain:
 gateway attestation before sending, receipt verification after.
 """
 
-import os
 import logging
+import os
 from typing import Optional
 
 import httpx

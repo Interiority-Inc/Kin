@@ -12,10 +12,10 @@ import os
 os.environ.setdefault("KIN_SPIRIT_DIR", "/tmp/kin-test-spirits")
 os.environ.setdefault("KIN_APP_DIR", os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from tee.verification.attestation import verify_attestation, _detect_cpu_tee
+from tee.verification.attestation import _detect_cpu_tee, verify_attestation
+from tee.verification.code_hash import _hash_directory, verify_code_hash
 from tee.verification.encryption import verify_encryption
 from tee.verification.network import verify_network
-from tee.verification.code_hash import verify_code_hash, _hash_directory
 
 
 class TestAttestationVerification:

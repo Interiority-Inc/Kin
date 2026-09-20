@@ -13,9 +13,9 @@ or through the response handler (which strips [SPIRIT] blocks).
 This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
 
+import logging
 import os
 import subprocess
-import logging
 
 logger = logging.getLogger("kin.verification.network")
 

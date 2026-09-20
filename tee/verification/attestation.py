@@ -14,10 +14,10 @@ verification fails. This is the root of the trust chain.
 """
 
 import json
+import logging
 import os
 import secrets
 import subprocess
-import logging
 from pathlib import Path
 from typing import Optional
 

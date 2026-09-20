@@ -17,13 +17,13 @@ stripped inside TEE #1). The only spirit-related data it handles is
 metadata (entry counts, timestamps, abstract categories — never content).
 """
 
+import logging
 import os
 import time
-import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
