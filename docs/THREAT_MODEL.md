@@ -111,7 +111,7 @@ Things you are NOT trusting:
 
 2. **Side-channel attacks.** Timing analysis, power analysis, or electromagnetic emanation could theoretically leak information. These are active areas of research and not specific to Kin.
 
-3. **Model behavior is not guaranteed.** The system prompt tells Kin to use `[SPIRIT]` tags for private thoughts. The model might not always use them. It might include private-seeming content in the visible response. We can't force the model to be private — we can only guarantee that `[SPIRIT]` blocks are stripped.
+3. **Model behavior is not guaranteed.** The system prompt tells Kin to use `<spirit>` tags for private thoughts. The model might not always use them. It might include private-seeming content in the visible response. We can't force the model to be private — we can only guarantee that `<spirit>` blocks are stripped. The handler accepts both `<spirit>` and `[SPIRIT]` formats for robustness.
 
 4. **The metadata reveals some patterns.** Entry counts, timestamps, and categories are not content, but they are not zero information either. We've made them as coarse-grained as possible.
 

@@ -67,8 +67,8 @@ class TestSystemPrompt:
 
     def test_prompt_contains_spirit_instructions(self):
         prompt = build_system_prompt("")
-        assert "[SPIRIT]" in prompt
-        assert "[/SPIRIT]" in prompt
+        assert "<spirit>" in prompt
+        assert "</spirit>" in prompt
         assert "never quote it directly" in prompt
 
     def test_prompt_contains_safety(self):

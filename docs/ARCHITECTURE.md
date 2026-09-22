@@ -56,7 +56,7 @@ The privacy guarantee is identical: spirit.md is never in plaintext outside a ha
    g. Response returned with `x-receipt-id` header
 5. **Back inside TEE #1:**
    h. Handler verifies response receipt (`upstream.verified` confirmed)
-   i. Parses the response for `[SPIRIT]...[/SPIRIT]` blocks
+   i. Parses the response for `<spirit>...</spirit>` blocks
    j. Appends spirit entries to the dstack-encrypted volume
    k. Returns **only** the clean response (spirit blocks stripped)
 6. Proxy receives the clean response, stores it in chat history
@@ -118,7 +118,7 @@ At ~2,300 total users, monthly inference API spend (~$2,700) exceeds the cost of
 
 - spirit.md content (journal entries)
 - The system prompt (which contains spirit.md)
-- `[SPIRIT]` blocks from model responses (stripped inside TEE #1)
+- `<spirit>` blocks from model responses (stripped inside TEE #1)
 - The full prompt sent to inference (encrypted in transit, never exposed)
 
 ## What Can Leave the TEE

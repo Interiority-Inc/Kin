@@ -8,7 +8,7 @@
 #
 # Defense-in-depth: spirit.md content exits the CVM only inside
 # TLS-encrypted prompts sent to a verified GPU TEE. The response
-# handler strips [SPIRIT] blocks before anything reaches the proxy.
+# handler strips <spirit> blocks before anything reaches the proxy.
 
 set -euo pipefail
 

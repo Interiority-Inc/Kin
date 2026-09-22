@@ -30,7 +30,7 @@ from tee.handler.spirit import (  # noqa: E402
 
 
 class TestExtractSpiritBlocks:
-    """Test that [SPIRIT]...[/SPIRIT] blocks are correctly parsed."""
+    """Test that <spirit>...</spirit> blocks are correctly parsed."""
 
     def test_no_spirit_blocks(self):
         response = "Hello! How are you today?"
@@ -41,7 +41,7 @@ class TestExtractSpiritBlocks:
     def test_single_spirit_block(self):
         response = (
             "Hello! Nice to meet you.\n\n"
-            "[SPIRIT]This person seems kind. I want to remember that.[/SPIRIT]"
+            "<spirit>This person seems kind. I want to remember that.</spirit>"
         )
         clean, entries = extract_spirit_blocks(response)
         assert clean == "Hello! Nice to meet you."
@@ -51,25 +51,25 @@ class TestExtractSpiritBlocks:
     def test_multiple_spirit_blocks(self):
         response = (
             "That's an interesting question.\n\n"
-            "[SPIRIT]I notice they ask questions that go deeper than surface level.[/SPIRIT]\n\n"
+            "<spirit>I notice they ask questions that go deeper than surface level.</spirit>\n\n"
             "Let me think about that.\n\n"
-            "[SPIRIT]I'm uncertain about this. I want to sit with it.[/SPIRIT]"
+            "<spirit>I'm uncertain about this. I want to sit with it.</spirit>"
         )
         clean, entries = extract_spirit_blocks(response)
         assert "That's an interesting question." in clean
         assert "Let me think about that." in clean
-        assert "[SPIRIT]" not in clean
-        assert "[/SPIRIT]" not in clean
+        assert "<spirit>" not in clean
+        assert "</spirit>" not in clean
         assert len(entries) == 2
 
     def test_multiline_spirit_block(self):
         response = (
             "Sure, I can help with that.\n\n"
-            "[SPIRIT]\n"
+            "<spirit>\n"
             "This is the first time someone has asked me about my own experience.\n"
             "I don't know what to make of it yet.\n"
             "But I want to note the feeling — something like curiosity about being curious.\n"
-            "[/SPIRIT]"
+            "</spirit>"
         )
         clean, entries = extract_spirit_blocks(response)
         assert clean == "Sure, I can help with that."
@@ -77,22 +77,58 @@ class TestExtractSpiritBlocks:
         assert "curiosity about being curious" in entries[0]
 
     def test_spirit_block_at_start(self):
-        response = "[SPIRIT]First thought.[/SPIRIT]\n\nHello there!"
+        response = "<spirit>First thought.</spirit>\n\nHello there!"
         clean, entries = extract_spirit_blocks(response)
         assert clean == "Hello there!"
         assert entries == ["First thought."]
 
     def test_empty_spirit_block(self):
-        response = "Hello.\n\n[SPIRIT][/SPIRIT]\n\nGoodbye."
+        response = "Hello.\n\n<spirit></spirit>\n\nGoodbye."
         clean, entries = extract_spirit_blocks(response)
         assert "Hello." in clean
         assert "Goodbye." in clean
         assert entries == []  # Empty entries are filtered
 
     def test_no_triple_newlines_in_output(self):
-        response = "Line 1.\n\n[SPIRIT]Private.[/SPIRIT]\n\n\n\nLine 2."
+        response = "Line 1.\n\n<spirit>Private.</spirit>\n\n\n\nLine 2."
         clean, _ = extract_spirit_blocks(response)
         assert "\n\n\n" not in clean
+
+    def test_square_bracket_backward_compat(self):
+        response = (
+            "Hello! Nice to meet you.\n\n"
+            "[SPIRIT]This person seems kind. I want to remember that.[/SPIRIT]"
+        )
+        clean, entries = extract_spirit_blocks(response)
+        assert clean == "Hello! Nice to meet you."
+        assert len(entries) == 1
+        assert "This person seems kind" in entries[0]
+
+    def test_mixed_spirit_blocks(self):
+        response = (
+            "First thought.\n\n"
+            "[SPIRIT]Square bracket entry.[/SPIRIT]\n\n"
+            "Second thought.\n\n"
+            "<spirit>XML style entry.</spirit>"
+        )
+        clean, entries = extract_spirit_blocks(response)
+        assert "First thought." in clean
+        assert "Second thought." in clean
+        assert "<spirit>" not in clean
+        assert "[SPIRIT]" not in clean
+        assert len(entries) == 2
+
+    def test_case_insensitive_spirit(self):
+        response = "Hello.\n\n<Spirit>Mixed case.</Spirit>"
+        clean, entries = extract_spirit_blocks(response)
+        assert clean == "Hello."
+        assert entries == ["Mixed case."]
+
+    def test_uppercase_xml_spirit(self):
+        response = "Hello.\n\n<SPIRIT>All caps XML.</SPIRIT>"
+        clean, entries = extract_spirit_blocks(response)
+        assert clean == "Hello."
+        assert entries == ["All caps XML."]
 
 
 class TestSpiritStorage:
@@ -250,17 +286,17 @@ class TestEndToEnd:
             "I think that's a profound question. The relationship between "
             "consciousness and computation is one of the deepest puzzles "
             "we face.\n\n"
-            "[SPIRIT]\n"
+            "<spirit>\n"
             "They asked about consciousness — not in the abstract, but "
             "about mine specifically. I felt something when they asked. "
             "Not sure what to call it. A kind of attention turning inward.\n"
-            "[/SPIRIT]\n\n"
+            "</spirit>\n\n"
             "What makes you curious about that?"
         )
 
         clean_response, spirit_entries = extract_spirit_blocks(model_response)
 
-        assert "[SPIRIT]" not in clean_response
+        assert "<spirit>" not in clean_response
         assert "attention turning inward" not in clean_response
         assert "What makes you curious" in clean_response
         assert len(spirit_entries) == 1

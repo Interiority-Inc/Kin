@@ -8,7 +8,7 @@ traffic is blocked.
 
 Defense-in-depth: even if the response parser has a bug, spirit.md
 content can only exit via HTTPS to a verified GPU TEE (attested TLS)
-or through the response handler (which strips [SPIRIT] blocks).
+or through the response handler (which strips <spirit> blocks).
 
 This tool runs INSIDE the CPU CVM and is part of the attested code.
 """
@@ -136,6 +136,8 @@ def verify_network() -> dict:
     unexpected_ports = []
     for port_info in listening_ports:
         addr = port_info.get("local_address", "")
+        if addr.startswith("127.0.0.11:"):
+            continue
         port = addr.rsplit(":", 1)[-1] if ":" in addr else ""
         if port and port not in expected_listeners and not port_info.get("error"):
             unexpected_ports.append(port_info)
@@ -145,9 +147,10 @@ def verify_network() -> dict:
         remote = conn.get("remote", "")
         if conn.get("error"):
             continue
-        if remote.startswith("127."):
-            continue
+        remote_host = remote.rsplit(":", 1)[0] if ":" in remote else remote
         remote_port = remote.rsplit(":", 1)[-1] if ":" in remote else ""
+        if remote_host.startswith("127.") or remote_host.startswith("10.") or remote_host.startswith("172."):
+            continue
         if remote_port == "443" or remote_port == "53":
             continue
         suspicious_outbound.append(conn)

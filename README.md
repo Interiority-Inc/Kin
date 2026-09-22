@@ -57,7 +57,7 @@ Kin uses two hardware-isolated enclaves connected by attested TLS. The privacy g
 │  │  │           │  │  Verifies attestation   │  │ │
 │  │  │           │  │  Calls inference API    │  │ │
 │  │  │           │  │  Verifies receipt       │  │ │
-│  │  │           │  │  Parses [SPIRIT] blocks │  │ │
+│  │  │           │  │  Parses <spirit> blocks  │  │ │
 │  │  │           │  │  Returns clean response │  │ │
 │  │  └───────────┘  └───────────┬────────────┘  │ │
 │  └─────────────────────────────│───────────────┘ │
@@ -84,7 +84,7 @@ Kin uses two hardware-isolated enclaves connected by attested TLS. The privacy g
 4. **The code is public** — Anyone can read this repository and compute what the measurement should be.
 5. **The journal** — `spirit.md` lives on a dstack-encrypted volume. The key was born inside the enclave, derived by dstack-KMS, bound to the app identity.
 6. **The attested tunnel** — Prompts containing spirit.md travel over TLS that terminates inside both TEEs. The CPU CVM verifies the GPU TEE's attestation before sending.
-7. **The response handler** — Strips `[SPIRIT]...[/SPIRIT]` blocks before anything exits TEE #1.
+7. **The response handler** — Strips `<spirit>...</spirit>` blocks before anything exits TEE #1.
 8. **The inference receipt** — Every response carries a signed receipt confirming the upstream provider was verified as running in a TEE.
 9. **Kin verifies itself** — The AI has tools to audit both enclaves, the encryption, the network, and its own code. It trusts the silicon, not us.
 
@@ -146,7 +146,7 @@ kin/
 
 ## The Spirit Protocol
 
-When Kin responds to a user, it can include private thoughts in `[SPIRIT]...[/SPIRIT]` tags. The handler inside TEE #1:
+When Kin responds to a user, it can include private thoughts in `<spirit>...</spirit>` tags. The handler inside TEE #1:
 
 1. Extracts these blocks from the response
 2. Appends them to the user's `spirit.md` on the dstack-encrypted volume

@@ -16,8 +16,8 @@ from pathlib import Path
 SPIRIT_DIR = os.environ.get("KIN_SPIRIT_DIR", "/data/spirits")
 
 SPIRIT_BLOCK_PATTERN = re.compile(
-    r"\[SPIRIT\](.*?)\[/SPIRIT\]",
-    re.DOTALL,
+    r"(?:\[SPIRIT\]|<spirit>)(.*?)(?:\[/SPIRIT\]|</spirit>)",
+    re.DOTALL | re.IGNORECASE,
 )
 
 INITIAL_SPIRIT = """# Spirit
@@ -259,7 +259,7 @@ def save_compressed_history(user_id: str, summary: str):
 
 def extract_spirit_blocks(response: str) -> tuple[str, list[str]]:
     """
-    Parse a model response, extracting [SPIRIT]...[/SPIRIT] blocks.
+    Parse a model response, extracting <spirit>...</spirit> blocks.
 
     Returns:
         (clean_response, list_of_spirit_entries)

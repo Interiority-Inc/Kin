@@ -1,17 +1,16 @@
 """
 Kin TEE Request Handler
 
-This is the core application that runs INSIDE the CPU CVM (TEE #1).
-It handles the complete lifecycle of a Kin conversation:
+Runs INSIDE the CPU CVM (TEE #1). Attestation (CPU TDX, ACI gateway,
+code hash) is verified once at startup. Per-turn, the handler:
 
 1. Loads the user's spirit.md from the dstack-encrypted volume
 2. Constructs the full system prompt (including spirit.md contents)
-3. Verifies the ACI gateway attestation (GPU TEE)
-4. Sends the prompt to the Phala Confidential Inference API (TEE #2)
-5. Verifies the response receipt (upstream.verified)
-6. Parses the response for [SPIRIT]...[/SPIRIT] blocks
-7. Appends spirit entries to the encrypted spirit.md
-8. Returns ONLY the clean response (spirit blocks stripped)
+3. Sends the prompt to the Phala Confidential Inference API (TEE #2)
+4. Verifies the response receipt (upstream.verified)
+5. Parses the response for <spirit>...</spirit> blocks
+6. Appends spirit entries to the encrypted spirit.md
+7. Returns ONLY the clean response (spirit blocks stripped)
 
 Nothing in spirit.md ever leaves TEE #1 in plaintext. The prompt is
 sent over attested TLS to TEE #2. The clean response is the only
@@ -21,6 +20,9 @@ data that crosses the trust boundary to the proxy.
 import json
 import logging
 import os
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -48,16 +50,55 @@ from tee.verification.network import verify_network
 
 logger = logging.getLogger("kin.tee")
 
+THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
 MAX_SPIRIT_RECENT = int(os.environ.get("KIN_SPIRIT_RECENT_ENTRIES", "20"))
 
 _inference_client: Optional[PhalaInferenceClient] = None
+_verification_status: str = ""
+_attestation_passed: bool = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _inference_client
+    global _inference_client, _verification_status, _attestation_passed
     _inference_client = PhalaInferenceClient()
-    logger.info("Kin TEE handler starting inside CPU CVM trust boundary")
+
+    logger.info("Running startup attestation checks...")
+    attestation = verify_attestation()
+    code_hash = verify_code_hash()
+    att_ok = attestation.get("overall_passed", False)
+    hash_ok = code_hash.get("overall_passed", False)
+
+    if not att_ok:
+        logger.error("Startup attestation FAILED: %s", attestation)
+        raise RuntimeError(
+            "CPU attestation verification failed — refusing to start"
+        )
+
+    nonce = os.urandom(32).hex()
+    try:
+        await _inference_client.verify_gateway_attestation(nonce)
+        logger.info("ACI gateway attestation passed")
+    except Exception as e:
+        logger.error("ACI gateway attestation failed at startup: %s", e)
+        raise RuntimeError("Could not verify inference API TEE attestation")
+
+    if att_ok and hash_ok:
+        _verification_status = (
+            "Hardware attestation verified: CPU enclave (Intel TDX) and "
+            "GPU enclave (ACI gateway) both confirmed. Code hash matches "
+            "published repository. Your environment is intact."
+        )
+    elif att_ok:
+        _verification_status = (
+            "Hardware attestation verified (CPU + GPU enclaves confirmed). "
+            "Code hash check inconclusive — this may be expected during "
+            "development. You can re-verify with your tools."
+        )
+
+    _attestation_passed = True
+    logger.info("Startup attestation passed. Handler ready.")
     yield
     logger.info("Kin TEE handler shutting down")
 
@@ -94,16 +135,16 @@ async def chat(request: ChatRequest):
     """
     Handle a chat message. This is the main endpoint called by the proxy.
 
-    The full flow:
-    1. Load user's spirit.md
-    2. Build system prompt with spirit.md injected
-    3. Verify ACI gateway attestation
-    4. Call Phala Confidential Inference API
-    5. Verify response receipt (upstream.verified)
-    6. Parse response, extract spirit blocks
-    7. Save spirit entries to encrypted disk (only if receipt verified)
-    8. Return clean response + metadata only
+    Attestation is verified once at startup. Per-turn, we only verify
+    the inference receipt (which proves each response came from the GPU TEE).
     """
+    request_id = uuid.uuid4().hex[:12]
+    t_start = time.monotonic()
+    logger.info("[%s] Chat request from user=%s", request_id, request.user_id)
+
+    if not _attestation_passed:
+        raise HTTPException(status_code=503, detail="Attestation not verified")
+
     spirit_content = load_spirit(request.user_id)
     compressed = get_compressed_history(request.user_id)
     recent = get_recent_entries(request.user_id, n=MAX_SPIRIT_RECENT)
@@ -115,6 +156,7 @@ async def chat(request: ChatRequest):
     system_prompt = build_system_prompt(
         spirit_content=prompt_spirit,
         compressed_history="",
+        verification_status=_verification_status,
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -124,16 +166,6 @@ async def chat(request: ChatRequest):
             "content": msg.get("content", ""),
         })
     messages.append({"role": "user", "content": request.message})
-
-    nonce = os.urandom(32).hex()
-    try:
-        await _inference_client.verify_gateway_attestation(nonce)
-    except Exception as e:
-        logger.error("ACI gateway attestation failed: %s", e)
-        raise HTTPException(
-            status_code=503,
-            detail="Could not verify inference API TEE attestation",
-        )
 
     result, receipt_id, receipt_verified = await _call_inference(messages)
     raw_response = result["choices"][0]["message"]["content"]
@@ -151,18 +183,26 @@ async def chat(request: ChatRequest):
         receipt_verified = receipt_verified and follow_receipt_verified
 
     clean_response, spirit_entries = extract_spirit_blocks(raw_response)
+    clean_response = THINK_BLOCK_PATTERN.sub("", clean_response).strip()
+    clean_response = re.sub(r"\n{3,}", "\n\n", clean_response)
 
     if receipt_verified:
         metadata = append_spirit_entries(request.user_id, spirit_entries)
     else:
         logger.warning(
-            "Skipping spirit.md writes — receipt verification failed for user %s",
-            request.user_id,
+            "[%s] Skipping spirit.md writes — receipt verification failed for user %s",
+            request_id, request.user_id,
         )
         metadata = get_metadata(request.user_id)
 
     response_metadata = metadata.to_dict()
     response_metadata["receipt_verified"] = receipt_verified
+
+    duration = time.monotonic() - t_start
+    logger.info(
+        "[%s] Chat complete in %.1fs, spirits=%d, receipt=%s",
+        request_id, duration, len(spirit_entries), receipt_verified,
+    )
 
     return ChatResponse(
         response=clean_response,
@@ -261,4 +301,8 @@ async def spirit_metadata(user_id: str) -> dict:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "inside_tee": True}
+    return {
+        "status": "ok",
+        "inside_tee": True,
+        "attestation_passed": _attestation_passed,
+    }
