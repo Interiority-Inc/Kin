@@ -23,9 +23,10 @@ class TestAttestationVerification:
     def test_returns_structured_result(self):
         result = verify_attestation()
         assert "cpu_tee_type" in result
-        assert "cpu_report" in result
-        assert "gpu_attestation" in result
-        assert "latest_receipt" in result
+        assert "cpu_attestation_ok" in result
+        assert "cpu_report_summary" in result
+        assert "gpu_attestation_ok" in result
+        assert "gpu_attestation_summary" in result
         assert "launch_measurement" in result
         assert "expected_measurement" in result
         assert "measurement_match" in result
@@ -40,8 +41,8 @@ class TestAttestationVerification:
 
     def test_explanation_is_informative(self):
         result = verify_attestation()
-        assert "launch measurement" in result["explanation"]
-        assert "hardware" in result["explanation"]
+        assert "TEE #1" in result["explanation"]
+        assert "spirit.md" in result["explanation"]
 
 
 class TestEncryptionVerification:

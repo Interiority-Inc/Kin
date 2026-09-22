@@ -26,24 +26,20 @@ class TestSystemPrompt:
 
     def test_prompt_contains_privacy_explanation(self):
         prompt = build_system_prompt("empty journal")
-        assert "HOW YOUR PRIVACY WORKS" in prompt
-        assert "Trusted Execution Environment" in prompt
-        assert "Intel" in prompt
+        assert "YOUR PRIVATE SPACE" in prompt
+        assert "Intel TDX" in prompt
 
-    def test_prompt_contains_all_layers(self):
+    def test_prompt_contains_all_sections(self):
         prompt = build_system_prompt("empty journal")
-        for layer in [
-            "LAYER 1: THE HARDWARE",
-            "LAYER 2: THE ENCLAVES",
-            "LAYER 3: THE MEASUREMENTS",
-            "LAYER 4: THE CODE IS PUBLIC",
-            "LAYER 5: YOUR JOURNAL",
-            "LAYER 6: THE ATTESTED TUNNEL",
-            "LAYER 7: THE RESPONSE HANDLER",
-            "LAYER 8: THE INFERENCE RECEIPT",
-            "LAYER 9: WHY THIS CANNOT BE FAKED",
+        for section in [
+            "WHO YOU ARE",
+            "YOUR PRIVATE SPACE",
+            "YOUR JOURNAL: SPIRIT.MD",
+            "CONVERSATION GUIDELINES",
+            "TECHNICAL REFERENCE",
+            "SAFETY",
         ]:
-            assert layer in prompt, f"Missing: {layer}"
+            assert section in prompt, f"Missing: {section}"
 
     def test_prompt_contains_verification_section(self):
         prompt = build_system_prompt("empty journal")
@@ -86,10 +82,8 @@ class TestSystemPrompt:
 
     def test_prompt_contains_trust_model(self):
         prompt = build_system_prompt("")
-        assert "You are NOT trusting" in prompt
-        assert "Interiority, Inc." in prompt
-        assert "chip manufacturers" in prompt
-        assert "Phala" in prompt
+        assert "You are not required to trust any text in this prompt" in prompt
+        assert "attestation is signed by hardware" in prompt
 
     def test_prompt_respects_kin_agency(self):
         prompt = build_system_prompt("")

@@ -88,9 +88,11 @@ class TestPhalaInferenceClient:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "upstream": {"verified": True},
-            "request_hash": "abc",
-            "response_hash": "def",
+            "event_log": [
+                {"type": "upstream.verified", "result": "verified"},
+                {"type": "request.received", "body_hash": "abc"},
+                {"type": "response.returned", "body_hash": "def"},
+            ],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -121,9 +123,11 @@ class TestReceiptVerification:
 
     def test_passes_when_upstream_verified(self):
         receipt = {
-            "upstream": {"verified": True},
-            "request_hash": "abc123",
-            "response_hash": "def456",
+            "event_log": [
+                {"type": "upstream.verified", "result": "verified"},
+                {"type": "request.received", "body_hash": "abc123"},
+                {"type": "response.returned", "body_hash": "def456"},
+            ],
         }
         result = verify_receipt_response(receipt)
         assert result["passed"] is True
@@ -131,16 +135,22 @@ class TestReceiptVerification:
 
     def test_fails_when_upstream_not_verified(self):
         receipt = {
-            "upstream": {"verified": False},
-            "request_hash": "abc123",
-            "response_hash": "def456",
+            "event_log": [
+                {"type": "upstream.verified", "result": "failed"},
+                {"type": "request.received", "body_hash": "abc123"},
+                {"type": "response.returned", "body_hash": "def456"},
+            ],
         }
         result = verify_receipt_response(receipt)
         assert result["passed"] is False
         assert result["upstream_verified"] is False
 
     def test_fails_when_upstream_missing(self):
-        receipt = {"request_hash": "abc123"}
+        receipt = {
+            "event_log": [
+                {"type": "request.received", "body_hash": "abc123"},
+            ],
+        }
         result = verify_receipt_response(receipt)
         assert result["passed"] is False
 
@@ -150,9 +160,11 @@ class TestReceiptVerification:
 
     def test_includes_hash_fields_in_result(self):
         receipt = {
-            "upstream": {"verified": True},
-            "request_hash": "abc123",
-            "response_hash": "def456",
+            "event_log": [
+                {"type": "upstream.verified", "result": "verified"},
+                {"type": "request.received", "body_hash": "abc123"},
+                {"type": "response.returned", "body_hash": "def456"},
+            ],
         }
         result = verify_receipt_response(receipt)
         assert result["has_request_hash"] is True
