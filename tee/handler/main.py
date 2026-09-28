@@ -216,7 +216,7 @@ async def _call_inference(messages: list) -> tuple:
         result, receipt_id = await _inference_client.chat_completion(
             messages=messages,
             tools=VERIFICATION_TOOLS,
-            temperature=0.7,
+            temperature=1.0,
             max_tokens=4096,
         )
     except Exception as e:

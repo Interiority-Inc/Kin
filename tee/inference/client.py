@@ -48,14 +48,19 @@ class PhalaInferenceClient:
         self,
         messages: list[dict],
         tools: Optional[list] = None,
-        temperature: float = 0.7,
+        temperature: float = 1.0,
         max_tokens: int = 4096,
+        reasoning_enabled: bool = False,
     ) -> tuple:
         payload: dict = {
             "model": self.model_id,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            # Hybrid thinking models (e.g. DeepSeek V3.2): keep thinking OFF
+            # for chat unless explicitly enabled. Params per Phala catalog.
+            "reasoning": {"enabled": bool(reasoning_enabled)},
+            "include_reasoning": bool(reasoning_enabled),
         }
         if tools:
             payload["tools"] = tools
