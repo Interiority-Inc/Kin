@@ -45,11 +45,14 @@ services:
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                    # Hybrid thinking models (e.g. DeepSeek V3.2): keep thinking OFF
-                    # for chat unless explicitly enabled. Params per Phala catalog.
-                    "reasoning": {"enabled": bool(reasoning_enabled)},
-                    "include_reasoning": bool(reasoning_enabled),
                 }
+                # NOTE (2026-09-28): the Phala inference gateway rejects the
+                # "reasoning"/"include_reasoning" params with HTTP 400 for
+                # deepseek/deepseek-v3.2, so they are only sent when explicitly
+                # enabled. Thinking stays OFF by default.
+                if reasoning_enabled:
+                    payload["reasoning"] = {"enabled": True}
+                    payload["include_reasoning"] = True
                 if tools:
                     payload["tools"] = tools
 
