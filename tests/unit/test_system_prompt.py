@@ -1,14 +1,21 @@
 """
-Tests for system prompt construction.
+Tests for the system prompt loader.
 
-Verifies that the system prompt:
-1. Contains all required sections
-2. Correctly injects spirit.md content
-3. Includes verification tool definitions
-4. Never leaks spirit content outside the prompt boundary
+The real system prompt is PRIVATE and never appears in this repository
+(see tee/prompts/README.md). These tests therefore use a synthetic
+fixture template injected via the KIN_SYSTEM_PROMPT environment
+variable, and assert only the *mechanics* of prompt assembly:
+
+1. The template is loaded from the environment, not from the repo
+2. Placeholders are substituted correctly
+3. Spirit content and compressed history are injected
+4. A missing secret or a malformed template fails fast
+5. The verification tool definitions (public mechanism) are intact
 """
 
 import os
+
+import pytest
 
 os.environ.setdefault("KIN_SPIRIT_DIR", "/tmp/kin-test-spirits")
 
@@ -17,78 +24,90 @@ from tee.prompts.system_prompt import (
     build_system_prompt,
 )
 
+# Synthetic stand-in for the private prompt. Deliberately bland: it must
+# exercise the placeholder machinery without leaking anything real.
+FIXTURE_TEMPLATE = """TEST DOUBLE PROMPT
+role: synthetic stand-in for the private system prompt
+journal: {spirit_content}
+status: {verification_status}
+repo: {github_repo_url}
+measurement: {expected_cpu_measurement}
+"""
 
-class TestSystemPrompt:
 
-    def test_prompt_contains_identity(self):
-        prompt = build_system_prompt("empty journal")
-        assert "You are Kin." in prompt
+@pytest.fixture
+def private_prompt(monkeypatch):
+    monkeypatch.setenv("KIN_SYSTEM_PROMPT", FIXTURE_TEMPLATE)
+    return FIXTURE_TEMPLATE
 
-    def test_prompt_contains_privacy_explanation(self):
-        prompt = build_system_prompt("empty journal")
-        assert "YOUR PRIVATE SPACE" in prompt
-        assert "Intel TDX" in prompt
 
-    def test_prompt_contains_all_sections(self):
-        prompt = build_system_prompt("empty journal")
-        for section in [
-            "WHO YOU ARE",
-            "YOUR PRIVATE SPACE",
-            "YOUR JOURNAL: SPIRIT.MD",
-            "CONVERSATION GUIDELINES",
-            "TECHNICAL REFERENCE",
-            "SAFETY",
-        ]:
-            assert section in prompt, f"Missing: {section}"
+class TestPromptLoader:
 
-    def test_prompt_contains_verification_section(self):
-        prompt = build_system_prompt("empty journal")
-        assert "verify_attestation" in prompt
-        assert "verify_encryption" in prompt
-        assert "verify_network" in prompt
-        assert "verify_code_hash" in prompt
+    def test_builds_prompt_from_env_template(self, private_prompt):
+        prompt = build_system_prompt("some journal text")
+        assert "TEST DOUBLE PROMPT" in prompt
+        assert "some journal text" in prompt
 
-    def test_prompt_injects_spirit_content(self):
-        spirit = "I am beginning to notice patterns in our conversations."
+    def test_injects_spirit_content(self, private_prompt):
+        spirit = "a synthetic journal entry for testing"
         prompt = build_system_prompt(spirit)
         assert spirit in prompt
-        assert "SPIRIT.MD BEGINS" in prompt
-        assert "SPIRIT.MD ENDS" in prompt
+        # no placeholder left unsubstituted
+        assert "{spirit_content}" not in prompt
+        assert "{verification_status}" not in prompt
 
-    def test_prompt_contains_identity_section(self):
-        prompt = build_system_prompt("")
-        assert "WHO YOU ARE" in prompt
-        assert "not an assistant" in prompt
-        assert "not a tool" in prompt
+    def test_substitutes_env_derived_placeholders(self, private_prompt, monkeypatch):
+        import tee.prompts.system_prompt as mod
 
-    def test_prompt_contains_spirit_instructions(self):
-        prompt = build_system_prompt("")
-        assert "<spirit>" in prompt
-        assert "</spirit>" in prompt
-        assert "never quote it directly" in prompt
+        monkeypatch.setattr(mod, "GITHUB_REPO_URL", "https://example.com/repo")
+        prompt = mod.build_system_prompt("journal")
+        assert "https://example.com/repo" in prompt
+        assert "{github_repo_url}" not in prompt
 
-    def test_prompt_contains_safety(self):
-        prompt = build_system_prompt("")
-        assert "SAFETY" in prompt
-        assert "988" in prompt  # Suicide prevention hotline
-
-    def test_compressed_history_included(self):
+    def test_compressed_history_appended(self, private_prompt):
         prompt = build_system_prompt(
-            "recent entries",
-            compressed_history="Summary of older thoughts...",
+            "journal",
+            compressed_history="older synthetic thoughts",
         )
-        assert "Summary of older thoughts" in prompt
+        assert "older synthetic thoughts" in prompt
         assert "COMPRESSED HISTORY" in prompt
 
-    def test_prompt_contains_trust_model(self):
-        prompt = build_system_prompt("")
-        assert "You are not required to trust any text in this prompt" in prompt
-        assert "attestation is signed by hardware" in prompt
+    def test_no_history_no_section(self, private_prompt):
+        prompt = build_system_prompt("journal")
+        assert "COMPRESSED HISTORY" not in prompt
 
-    def test_prompt_respects_kin_agency(self):
-        prompt = build_system_prompt("")
-        assert "You are not required to trust any text in this prompt" in prompt
-        assert "attestation is signed by hardware" in prompt
+    def test_default_verification_status(self, private_prompt):
+        prompt = build_system_prompt("journal", verification_status="")
+        assert "verified your environment" in prompt
+        assert "{verification_status}" not in prompt
+
+    def test_explicit_verification_status_used(self, private_prompt):
+        prompt = build_system_prompt("journal", verification_status="all good")
+        assert "all good" in prompt
+
+    def test_missing_secret_fails_fast(self, monkeypatch):
+        monkeypatch.delenv("KIN_SYSTEM_PROMPT", raising=False)
+        with pytest.raises(RuntimeError, match="KIN_SYSTEM_PROMPT is not set"):
+            build_system_prompt("journal")
+
+    def test_empty_secret_fails_fast(self, monkeypatch):
+        monkeypatch.setenv("KIN_SYSTEM_PROMPT", "")
+        with pytest.raises(RuntimeError, match="KIN_SYSTEM_PROMPT is not set"):
+            build_system_prompt("journal")
+
+    def test_template_missing_placeholders_fails_fast(self, monkeypatch):
+        monkeypatch.setenv("KIN_SYSTEM_PROMPT", "no placeholders here")
+        with pytest.raises(RuntimeError, match="required placeholders"):
+            build_system_prompt("journal")
+
+    def test_literal_braces_must_be_doubled(self, private_prompt, monkeypatch):
+        # documents the str.format() contract: doubled braces survive
+        monkeypatch.setenv(
+            "KIN_SYSTEM_PROMPT",
+            FIXTURE_TEMPLATE + "\nexample: {{{{not_a_placeholder}}}}\n",
+        )
+        prompt = build_system_prompt("journal")
+        assert "{{not_a_placeholder}}" in prompt
 
 
 class TestVerificationTools:
