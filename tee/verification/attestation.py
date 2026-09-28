@@ -39,6 +39,23 @@ def _detect_cpu_tee() -> str:
     return "none"
 
 
+def _parse_mrtd_from_quote(quote_hex: str) -> str:
+    """
+    Extract the MRTD (TDX launch measurement) from a TDX quote hex string.
+
+    TDX quote v4/v5 layout: 48-byte quote header, then the TD report body
+    with MRTD (48 bytes) at body offset 136 -> absolute offset 184.
+    Returns "" when the quote is missing or too short.
+    """
+    try:
+        raw = bytes.fromhex(quote_hex or "")
+        if len(raw) < 232:
+            return ""
+        return raw[184:232].hex()
+    except (ValueError, TypeError):
+        return ""
+
+
 def _get_tdx_report_via_dstack() -> dict:
     nonce = secrets.token_hex(32)
     try:
@@ -52,6 +69,11 @@ def _get_tdx_report_via_dstack() -> dict:
                 data = response.json()
                 data["nonce_sent"] = nonce
                 data["source"] = "dstack-tappd"
+                # The startup measurement pin (KIN_EXPECTED_CPU_MEASUREMENT)
+                # compares cpu_report["measurement"]; dstack's GetQuote does
+                # not provide it, so parse MRTD from the quote (2026-09-28).
+                data["measurement"] = _parse_mrtd_from_quote(data.get("quote", ""))
+                data["mrtd"] = data["measurement"]
                 return data
             logger.error("dstack /GetQuote returned %d: %s", response.status_code, response.text[:200])
             return {"error": f"dstack /GetQuote returned {response.status_code}"}

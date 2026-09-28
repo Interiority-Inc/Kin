@@ -12,7 +12,7 @@ import os
 os.environ.setdefault("KIN_SPIRIT_DIR", "/tmp/kin-test-spirits")
 os.environ.setdefault("KIN_APP_DIR", os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from tee.verification.attestation import _detect_cpu_tee, verify_attestation
+from tee.verification.attestation import _detect_cpu_tee, _parse_mrtd_from_quote, verify_attestation
 from tee.verification.code_hash import _hash_directory, verify_code_hash
 from tee.verification.encryption import verify_encryption
 from tee.verification.network import verify_network
@@ -43,6 +43,17 @@ class TestAttestationVerification:
         result = verify_attestation()
         assert "TEE #1" in result["explanation"]
         assert "spirit.md" in result["explanation"]
+
+    def test_parse_mrtd_from_quote(self):
+        # Synthetic TDX quote v4: 48-byte header + TD body, MRTD at [184:232]
+        mrtd = bytes(range(48))
+        raw = bytes(184) + mrtd + bytes(64)
+        assert _parse_mrtd_from_quote(raw.hex()) == mrtd.hex()
+
+    def test_parse_mrtd_rejects_short_or_bad_quote(self):
+        assert _parse_mrtd_from_quote("") == ""
+        assert _parse_mrtd_from_quote("zz") == ""
+        assert _parse_mrtd_from_quote(bytes(100).hex()) == ""
 
 
 class TestEncryptionVerification:

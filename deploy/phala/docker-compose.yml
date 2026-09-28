@@ -902,6 +902,41 @@ services:
             return {"status": "ok", "inside_tee": True, "attestation_passed": _attestation_passed}
         MAIN_EOF
 
+        # HOTFIX 2026-09-28: parse MRTD from the dstack TDX quote so the
+        # KIN_EXPECTED_CPU_MEASUREMENT pin can match. Without this,
+        # launch_measurement is always "" and startup refuses to boot.
+        # (Fixed properly in tee/verification/attestation.py; remove this
+        # block once the image is rebuilt with that fix.)
+        python3 << 'ATTEST_EOF'
+        p = "/app/tee/verification/attestation.py"
+        s = open(p).read()
+        if "_parse_mrtd_from_quote" not in s:
+            lines = [
+                "",
+                "def _parse_mrtd_from_quote(quote_hex):",
+                "    try:",
+                '        raw = bytes.fromhex(quote_hex or "")',
+                "        if len(raw) < 232:",
+                '            return ""',
+                "        return raw[184:232].hex()",
+                "    except (ValueError, TypeError):",
+                '        return ""',
+                "",
+            ]
+            helper = "\n".join(lines)
+            s = s.replace("def _get_tdx_report_via_dstack() -> dict:",
+                          helper + "\ndef _get_tdx_report_via_dstack() -> dict:", 1)
+            s = s.replace('data["source"] = "dstack-tappd"\n                return data',
+                          'data["source"] = "dstack-tappd"\n'
+                          '                data["measurement"] = _parse_mrtd_from_quote(data.get("quote", ""))\n'
+                          '                data["mrtd"] = data["measurement"]\n'
+                          '                return data', 1)
+            open(p, "w").write(s)
+            print("attestation MRTD hotfix applied")
+        else:
+            print("attestation MRTD hotfix already present")
+        ATTEST_EOF
+
         echo "All hotfixes applied"
         cd /app
         exec python3 -m uvicorn tee.handler.main:app --host 0.0.0.0 --port 8080 --workers 1 --log-level info 2>&1
