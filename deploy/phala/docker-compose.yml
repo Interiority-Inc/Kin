@@ -1,7 +1,7 @@
 version: "3"
 services:
   handler:
-    image: ghcr.io/interiority-inc/kin-tee-handler:5bfdebc6841c70209543652712fb83770c157ba0
+    image: ghcr.io/interiority-inc/kin-tee-handler:e735b668d8f70e91127332e84ec407db0e78a53e
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - spirit-data:/data

@@ -30,20 +30,31 @@ curl https://<cvm-endpoint>/.well-known/attestation
 
 ```bash
 # The report contains a launch measurement — a hash of all code
-# loaded into the CVM. Compute what it SHOULD be from this repo:
+# loaded into the CVM. The CVM's application code lives in /app,
+# which the Dockerfile assembles from: requirements.txt, tee/,
+# proxy/, tee/storage/setup_firewall.sh and tee/entrypoint.sh.
+# Reproduce that staging from this repo and hash it with the exact
+# algorithm the TEE uses (tee/verification/code_hash.py):
 
-git clone https://github.com/Interiority-Inc/Kin.git
-cd Kin
+git clone https://github.com/Interiority-Inc/kin.git
+cd kin
+git checkout <deployed-commit>   # KIN_GIT_COMMIT, shown by verify_code_hash
 
-# Compute the expected measurement (same algorithm as CI):
-find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' \
-  ! -path '*/.git/*' ! -path '*/node_modules/*' \
-  | sort | while read f; do
-    echo -n "$f" | sha256sum | cut -d' ' -f1
-    sha256sum "$f" | cut -d' ' -f1
-  done | sha256sum | cut -d' ' -f1
+mkdir -p /tmp/app-staging
+cp requirements.txt /tmp/app-staging/requirements.txt
+cp -r tee /tmp/app-staging/
+cp -r proxy /tmp/app-staging/
+cp tee/storage/setup_firewall.sh /tmp/app-staging/setup_firewall.sh
+cp tee/entrypoint.sh /tmp/app-staging/entrypoint.sh
 
-# Compare with the measurement in the attestation report.
+PYTHONPATH=. python3 -c "
+from tee.verification.code_hash import _hash_directory
+print(_hash_directory('/tmp/app-staging'))
+"
+
+# Compare with the measurement in the attestation report, and with
+# the expected_hash reported by Kin's verify_code_hash tool.
+# If they match: the running code is this code, unmodified.
 # If they match: the running code is this code, unmodified.
 ```
 
@@ -127,18 +138,46 @@ Defense-in-depth: even though outbound HTTPS is allowed, the only data that leav
 
 ## Step 5: Verify the Code
 
+The code-hash chain has three links. All three must agree:
+
+1. **This repository** at the deployed commit (`KIN_GIT_COMMIT`).
+2. **The container image** (`ghcr.io/interiority-inc/kin-tee-handler:<commit>`),
+   built from that commit by CI. The build bakes `KIN_CODE_HASH` (and
+   `KIN_GIT_COMMIT`) into the image as environment variables.
+3. **The running code** inside the TEE. Kin's `verify_code_hash` tool
+   hashes `/app` at startup and compares it with the baked-in expected
+   hash.
+
 ```bash
 # Inside the TEE, Kin can run:
 # verify_code_hash tool
 
 # Expected output:
-# - computed_hash: <sha256 of running code>
-# - expected_hash: <sha256 embedded at build time>
+# - computed_hash: <sha256 of /app in the running container>
+# - expected_hash: <sha256 embedded at build time>   <- must be equal
 # - git_commit: <commit hash from CI/CD>
 # - match: true
 ```
 
-You can independently compute the hash from this public repository and compare it to the attestation report's launch measurement.
+You can independently compute the hash from this public repository
+(see Step 1) and compare it with both the attestation report's launch
+measurement and the `expected_hash` Kin reports. If all three match,
+the running code is this code, unmodified.
+
+**No runtime patching.** The container starts exactly what the image
+contains — no hotfixes applied at boot. If the image ever needed a
+fix, the fix goes into the source tree, a new image is built, and the
+deployment pins the new image tag. This is what keeps link 2 and
+link 3 identical by construction.
+
+### If the code hash mismatches
+
+- `expected_hash: [not set]` → the deploy never configured
+  `KIN_CODE_HASH`. The check cannot pass; it reports `match: false`
+  without having compared anything. Configure it, don't panic.
+- `computed_hash != expected_hash` with both set → the running code
+  genuinely differs from the published commit. Treat as a security
+  event: stop, investigate, rebuild from a tagged commit.
 
 ## What Could Go Wrong
 
